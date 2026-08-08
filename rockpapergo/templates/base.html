@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="{{ 'zh-Hant' if lang == 'zh' else 'vi' }}"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}{{ t('site_name') }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head><body><main class="card"><nav class="language" aria-label="{{ t('language') }}">
+{% for code, label in languages.items() %}<a href="{{ language_url(code) }}"{% if code == lang %} class="active" aria-current="page"{% endif %}>{{ label }}</a>{% if not loop.last %}<span>｜</span>{% endif %}{% endfor %}
+</nav>{% block content %}{% endblock %}</main></body></html>

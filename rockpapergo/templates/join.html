@@ -1,0 +1,5 @@
+{% extends 'base.html' %}{% block content %}<h1>{{ t('join_room') }}</h1>
+{% if error_key %}<p class="error">{{ t(error_key) }}</p>{% endif %}
+<form method="post" action="{{ url_for('game.join') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="code" value="{{ code }}">
+<p class="room-code">{{ t('room_number') }} <strong>{{ code }}</strong></p><label>{{ t('your_name') }}<input name="name" maxlength="20" required autofocus></label><button>{{ t('enter_game') }}</button></form>
+<a class="back" href="{{ url_for('game.index') }}">{{ t('back_home') }}</a>{% endblock %}

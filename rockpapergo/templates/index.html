@@ -1,0 +1,10 @@
+{% extends 'base.html' %}{% block content %}
+<div class="logo">✊ <span>{{ t('site_name') }}</span> ✌️</div><p class="lead">{{ t('tagline') }}</p>
+{% if error_key %}<p class="error">{{ t(error_key) }}</p>{% endif %}
+<form method="post" action="{{ url_for('game.create_room') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>{{ t('your_name') }}<input name="name" maxlength="20" required autocomplete="nickname" placeholder="{{ t('name_example') }}"></label>
+  <button>{{ t('create_room') }}</button>
+</form><div class="or">{{ t('or') }}</div>
+<form method="get" action="{{ url_for('game.join') }}"><label>{{ t('room_code') }}<input name="code" maxlength="6" required class="code-input" placeholder="ABC123"></label><button class="secondary">{{ t('join_room') }}</button></form>
+{% endblock %}
