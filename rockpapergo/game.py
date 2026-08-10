@@ -1,8 +1,9 @@
 import hmac
 import secrets
 import string
+from datetime import datetime, timezone
 
-from flask import Blueprint, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, abort, current_app, jsonify, redirect, render_template, request, session, url_for
 
 from .db import get_db
 
@@ -23,6 +24,7 @@ TRANSLATIONS = {
         "submitted": "已出拳，等待對手…", "draw_result": "平手！", "you_win": "你贏了！",
         "opponent_wins": "對手獲勝！", "played": "{name}出{move}", "connection_lost": "連線中斷，正在重試…",
         "copied": "已複製！", "language": "語言",
+        "data_notice": "開始遊戲即表示你同意我們匿名記錄出拳、勝負與反應時間，用於統計分析；不會記錄暱稱或 IP。",
     },
     "vi": {
         "site_name": "Oẳn tù tì GO", "tagline": "Hai điện thoại, một trận quyết đấu!", "your_name": "Biệt danh của bạn",
@@ -36,12 +38,15 @@ TRANSLATIONS = {
         "submitted": "Đã ra tay, đang chờ đối thủ…", "draw_result": "Hòa!", "you_win": "Bạn thắng!",
         "opponent_wins": "Đối thủ thắng!", "played": "{name} ra {move}", "connection_lost": "Mất kết nối, đang thử lại…",
         "copied": "Đã sao chép!", "language": "Ngôn ngữ",
+        "data_notice": "Khi bắt đầu, bạn đồng ý cho chúng tôi ghi ẩn danh lựa chọn, kết quả và thời gian phản hồi để phân tích; biệt danh và IP không được lưu trong dữ liệu phân tích.",
     },
 }
 
 
 @bp.before_app_request
 def select_language():
+    if "anon_player_id" not in session:
+        session["anon_player_id"] = secrets.token_urlsafe(18)
     requested = request.args.get("lang")
     if requested in LANGUAGES:
         session["lang"] = requested
@@ -84,6 +89,24 @@ def clean_name(value):
     return " ".join(value.strip().split())[:20]
 
 
+def now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def response_ms(started_at, moved_at):
+    start = datetime.fromisoformat(started_at)
+    moved = datetime.fromisoformat(moved_at)
+    return max(0, round((moved - start).total_seconds() * 1000))
+
+
+def clean_client_response_ms(value):
+    try:
+        milliseconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    return milliseconds if 0 <= milliseconds <= 3_600_000 else None
+
+
 def room_for_player(code):
     room = get_db().execute("SELECT * FROM rooms WHERE code = ?", (code,)).fetchone()
     if not room:
@@ -114,7 +137,12 @@ def create_room():
         if not db.execute("SELECT 1 FROM rooms WHERE code = ?", (code,)).fetchone():
             break
     token = secrets.token_urlsafe(24)
-    db.execute("INSERT INTO rooms(code, player1_name, player1_token) VALUES (?, ?, ?)", (code, name, token))
+    game_session_id = secrets.token_urlsafe(18)
+    db.execute("""INSERT INTO rooms(
+        code, game_session_id, player1_name, player1_token, player1_anon_id, player1_lang,
+        round_started_at) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (code, game_session_id, name, token, session["anon_player_id"],
+         session.get("lang", "zh"), now_iso()))
     db.commit()
     session["player_token"] = token
     return redirect(url_for("game.room", code=code))
@@ -137,8 +165,9 @@ def join():
     token = secrets.token_urlsafe(24)
     db = get_db()
     changed = db.execute(
-        "UPDATE rooms SET player2_name=?, player2_token=?, updated_at=CURRENT_TIMESTAMP WHERE code=? AND player2_token IS NULL",
-        (name, token, code),
+        """UPDATE rooms SET player2_name=?, player2_token=?, player2_anon_id=?, player2_lang=?,
+        round_started_at=?, updated_at=CURRENT_TIMESTAMP WHERE code=? AND player2_token IS NULL""",
+        (name, token, session["anon_player_id"], session.get("lang", "zh"), now_iso(), code),
     ).rowcount
     db.commit()
     if not changed:
@@ -167,6 +196,7 @@ def state(code):
         "both": both, "moves": [room["player1_move"], room["player2_move"]] if both else [None, None],
         "result": result, "score": [room["score1"], room["score2"], room["draws"]],
         "names": [room["player1_name"], room["player2_name"]], "player": player,
+        "app_version": current_app.config["APP_VERSION"],
     })
 
 
@@ -178,8 +208,49 @@ def move(code):
     if choice not in MOVES or not room["player2_token"]:
         abort(400)
     column = f"player{player}_move"
+    time_column = f"player{player}_moved_at"
+    client_time_column = f"player{player}_client_response_ms"
+    moved_at = now_iso()
+    client_response = clean_client_response_ms(request.form.get("client_response_ms"))
     db = get_db()
-    db.execute(f"UPDATE rooms SET {column}=?, updated_at=CURRENT_TIMESTAMP WHERE code=? AND {column} IS NULL", (choice, room["code"]))
+    changed = db.execute(
+        f"UPDATE rooms SET {column}=?, {time_column}=?, {client_time_column}=?, updated_at=CURRENT_TIMESTAMP "
+        f"WHERE code=? AND {column} IS NULL", (choice, moved_at, client_response, room["code"])
+    ).rowcount
+    completed = db.execute("SELECT * FROM rooms WHERE code=?", (room["code"],)).fetchone()
+    if changed and completed["player1_move"] and completed["player2_move"]:
+        a, b = completed["player1_move"], completed["player2_move"]
+        result = "draw" if a == b else ("p1" if BEATS[a] == b else "p2")
+        finished_at = max(completed["player1_moved_at"], completed["player2_moved_at"])
+        first_mover = "p1" if completed["player1_moved_at"] < completed["player2_moved_at"] else "p2"
+        previous = db.execute(
+            "SELECT result FROM game_rounds WHERE room_code=? AND round_no<? ORDER BY round_no DESC LIMIT 1",
+            (completed["code"], completed["round_no"]),
+        ).fetchone()
+        indexes = []
+        for anon_id in (completed["player1_anon_id"], completed["player2_anon_id"]):
+            count = db.execute("""SELECT COUNT(*) FROM game_rounds
+                WHERE player1_anon_id=? OR player2_anon_id=?""", (anon_id, anon_id)).fetchone()[0]
+            indexes.append(count + 1)
+        db.execute("""INSERT OR IGNORE INTO game_rounds(
+            room_code, round_no, player1_anon_id, player2_anon_id, player1_lang, player2_lang,
+            player1_move, player2_move, result, round_started_at, player1_moved_at,
+            player2_moved_at, completed_at, player1_response_ms, player2_response_ms,
+            player1_client_response_ms, player2_client_response_ms, first_mover, previous_result,
+            player1_round_index, player2_round_index, consent_version, schema_version,
+            app_version, game_session_id, round_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (
+            completed["code"], completed["round_no"], completed["player1_anon_id"],
+            completed["player2_anon_id"], completed["player1_lang"], completed["player2_lang"],
+            a, b, result, completed["round_started_at"], completed["player1_moved_at"],
+            completed["player2_moved_at"], finished_at,
+            response_ms(completed["round_started_at"], completed["player1_moved_at"]),
+            response_ms(completed["round_started_at"], completed["player2_moved_at"]),
+            completed["player1_client_response_ms"], completed["player2_client_response_ms"],
+            first_mover, previous["result"] if previous else None, indexes[0], indexes[1],
+            current_app.config["CONSENT_VERSION"], current_app.config["ANALYTICS_SCHEMA_VERSION"],
+            current_app.config["APP_VERSION"], completed["game_session_id"], "completed",
+        ))
     db.commit()
     return jsonify(ok=True)
 
@@ -196,7 +267,10 @@ def next_round(code):
     draw = 1 if a == b else 0
     db = get_db()
     db.execute("""UPDATE rooms SET round_no=round_no+1, player1_move=NULL, player2_move=NULL,
+        player1_moved_at=NULL, player2_moved_at=NULL, round_started_at=?,
+        player1_client_response_ms=NULL, player2_client_response_ms=NULL,
         score1=score1+?, score2=score2+?, draws=draws+?, updated_at=CURRENT_TIMESTAMP
-        WHERE code=? AND player1_move IS NOT NULL AND player2_move IS NOT NULL""", (score1, score2, draw, room["code"]))
+        WHERE code=? AND player1_move IS NOT NULL AND player2_move IS NOT NULL""",
+        (now_iso(), score1, score2, draw, room["code"]))
     db.commit()
     return jsonify(ok=True)

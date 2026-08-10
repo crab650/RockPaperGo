@@ -7,4 +7,5 @@
   <button>{{ t('create_room') }}</button>
 </form><div class="or">{{ t('or') }}</div>
 <form method="get" action="{{ url_for('game.join') }}"><label>{{ t('room_code') }}<input name="code" maxlength="6" required class="code-input" placeholder="ABC123"></label><button class="secondary">{{ t('join_room') }}</button></form>
+<p class="data-notice">{{ t('data_notice') }}</p>
 {% endblock %}

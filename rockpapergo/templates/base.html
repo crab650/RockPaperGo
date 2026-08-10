@@ -5,4 +5,4 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head><body><main class="card"><nav class="language" aria-label="{{ t('language') }}">
 {% for code, label in languages.items() %}<a href="{{ language_url(code) }}"{% if code == lang %} class="active" aria-current="page"{% endif %}>{{ label }}</a>{% if not loop.last %}<span>｜</span>{% endif %}{% endfor %}
-</nav>{% block content %}{% endblock %}</main></body></html>
+</nav>{% block content %}{% endblock %}<footer class="app-version">v{{ app_version }}</footer></main></body></html>

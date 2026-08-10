@@ -2,6 +2,7 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 title Rock Paper Go - Flask Server
+set "PYTHONUTF8=1"
 
 echo [1/4] Checking Python...
 where py.exe >nul 2>nul
@@ -33,8 +34,11 @@ echo       Installing dependencies...
 if errorlevel 1 goto failed
 
 :packages_ready
+for /f "delims=" %%V in ('call "%VENV_PY%" -c "from rockpapergo import __version__; print(__version__)"') do set "ROCKPAPERGO_VERSION=%%V"
+echo       Rock Paper Go v%ROCKPAPERGO_VERSION%
 set "ROCKPAPERGO_SECRET_KEY=local-dev-%RANDOM%-%RANDOM%-%RANDOM%-%RANDOM%"
 set "ROCKPAPERGO_DATA_DIR=%CD%\instance"
+if not defined ROCKPAPERGO_ADMIN_PASSWORD set "ROCKPAPERGO_ADMIN_PASSWORD=12345678"
 
 echo [3/4] Initializing database...
 "%VENV_PY%" -m flask --app wsgi init-db
@@ -45,6 +49,9 @@ echo.
 echo Open on this PC: http://127.0.0.1:5000
 echo For phones, use this PC's LAN IP followed by :5000
 echo Example: http://192.168.1.100:5000
+echo Analytics: http://127.0.0.1:5000/analytics
+echo Analytics username: admin
+echo Analytics password: %ROCKPAPERGO_ADMIN_PASSWORD%
 echo.
 echo Press Ctrl+C or close this window to stop.
 echo.
